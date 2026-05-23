@@ -18,7 +18,7 @@ class PhotoOrganizerApp(ctk.CTk):
 
         # Main window setup
         self.title("EXIF Photo Organizer")
-        self.geometry("600x650") # Made slightly taller for new options
+        self.geometry("620x680")
         self.resizable(False, False)
 
         # Variables
@@ -62,7 +62,7 @@ class PhotoOrganizerApp(ctk.CTk):
         self.path_container = ctk.CTkFrame(self.folder_frame, fg_color="transparent")
         self.path_container.pack(fill="x", padx=15, pady=10)
 
-        self.path_entry = ctk.CTkEntry(self.path_container, textvariable=self.folder_path, state='readonly', width=350)
+        self.path_entry = ctk.CTkEntry(self.path_container, textvariable=self.folder_path, state='readonly', width=370)
         self.path_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
         self.browse_btn = ctk.CTkButton(self.path_container, text="Browse...", width=100, command=self.browse_folder)
@@ -103,16 +103,30 @@ class PhotoOrganizerApp(ctk.CTk):
         )
         self.model_check.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Action Button
+        # Action Buttons (Side by Side)
+        self.action_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.action_frame.pack(fill="x", padx=20, pady=10)
+
+        self.preview_btn = ctk.CTkButton(
+            self.action_frame, 
+            text="Preview Changes", 
+            height=40,
+            fg_color="#4B5563", hover_color="#374151", # Distinct gray color for preview
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=self.start_preview, 
+            state="disabled"
+        )
+        self.preview_btn.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
         self.run_btn = ctk.CTkButton(
-            self, 
-            text="Organize Photos", 
+            self.action_frame, 
+            text="Apply Changes", 
             height=40, 
             font=ctk.CTkFont(size=14, weight="bold"),
             command=self.start_processing, 
             state="disabled"
         )
-        self.run_btn.pack(fill="x", padx=20, pady=15)
+        self.run_btn.pack(side="right", fill="x", expand=True, padx=(10, 0))
 
         # Log Console
         self.log_label = ctk.CTkLabel(self, text="Activity Log", font=ctk.CTkFont(weight="bold"))
@@ -135,6 +149,7 @@ class PhotoOrganizerApp(ctk.CTk):
         folder = filedialog.askdirectory(title="Select Folder with Images")
         if folder:
             self.folder_path.set(folder)
+            self.preview_btn.configure(state="normal")
             self.run_btn.configure(state="normal")
             self.log_message(f"Selected folder: {folder}")
 
@@ -145,17 +160,13 @@ class PhotoOrganizerApp(ctk.CTk):
         self.log_text.configure(state="disabled")
 
     def clean_filename_string(self, text):
-        """Removes null bytes and illegal Windows filename characters."""
         if not text:
             return ""
-        # Remove null bytes often left by camera firmware
         text = str(text).replace('\x00', '').strip()
-        # Remove illegal Windows characters: < > : " / \ | ? *
         text = re.sub(r'[<>:"/\\|?*]', '', text)
         return text
 
     def get_exif_data(self, file_path):
-        """Extracts Date Taken, Make, and Model from EXIF data."""
         data = {'date': None, 'make': None, 'model': None}
         try:
             image = Image.open(file_path)
@@ -176,7 +187,6 @@ class PhotoOrganizerApp(ctk.CTk):
         return data
 
     def generate_new_name(self, exif_data, original_extension, use_full_year, use_maker, use_model):
-        """Formats the new filename based on selected options."""
         date_string = exif_data.get('date')
         if not date_string:
             return None
@@ -184,19 +194,16 @@ class PhotoOrganizerApp(ctk.CTk):
         try:
             date_obj = datetime.strptime(date_string, "%Y:%m:%d %H:%M:%S")
             
-            # Determine Date Format
             if use_full_year:
                 base_name = date_obj.strftime("%Y%m%d %H%M %S")
             else:
                 base_name = date_obj.strftime("%y%m%d %H%M %S")
             
-            # Build the suffix
             suffix = ""
             make = exif_data.get('make')
             model = exif_data.get('model')
 
             if use_maker and make:
-                # Remove spaces from the maker name (e.g., "Google" instead of "Google ")
                 suffix += f"_{make.replace(' ', '')}"
                 
             if use_model and model:
@@ -206,22 +213,29 @@ class PhotoOrganizerApp(ctk.CTk):
         except ValueError:
             return None
 
+    def start_preview(self):
+        self._start_thread(dry_run=True)
+
     def start_processing(self):
+        self._start_thread(dry_run=False)
+
+    def _start_thread(self, dry_run):
         folder = self.folder_path.get()
         if not folder:
             return
             
-        # Capture settings from UI before passing to the background thread
         settings = {
             'folder': folder,
             'backup': self.backup_var.get(),
             'full_year': self.full_year_var.get(),
             'maker': self.maker_var.get(),
-            'model': self.model_var.get()
+            'model': self.model_var.get(),
+            'dry_run': dry_run
         }
             
         # Disable UI
         self.browse_btn.configure(state="disabled")
+        self.preview_btn.configure(state="disabled")
         self.run_btn.configure(state="disabled")
         self.backup_check.configure(state="disabled")
         self.full_year_check.configure(state="disabled")
@@ -229,40 +243,50 @@ class PhotoOrganizerApp(ctk.CTk):
         self.model_check.configure(state="disabled")
         self.theme_btn.configure(state="disabled")
         
-        self.log_message("\n--- Starting Process ---")
+        mode_text = "PREVIEW MODE" if dry_run else "LIVE PROCESS"
+        self.log_message(f"\n--- Starting Process ({mode_text}) ---")
+        
         threading.Thread(target=self.process_photos, args=(settings,), daemon=True).start()
 
     def process_photos(self, settings):
         folder_path = settings['folder']
         do_backup = settings['backup']
+        dry_run = settings['dry_run']
+        
         processed_count = 0
         skipped_count = 0
         ignored_count = 0
         
+        # Virtual filesystem to track collisions during preview
+        projected_names = set() 
+        
         if do_backup:
-            backup_dir = os.path.join(folder_path, ".backup")
-            if not os.path.exists(backup_dir):
-                os.makedirs(backup_dir)
-                self.log_message("Created .backup folder.")
-            
-            self.log_message("Copying image files to backup folder... (This may take a moment)")
-            
-            for filename in os.listdir(folder_path):
-                file_path = os.path.join(folder_path, filename)
+            if dry_run:
+                self.log_message("Backup enabled: .backup folder will be created and populated during Apply.")
+            else:
+                backup_dir = os.path.join(folder_path, ".backup")
+                if not os.path.exists(backup_dir):
+                    os.makedirs(backup_dir)
+                    self.log_message("Created .backup folder.")
                 
-                if os.path.isdir(file_path): 
-                    continue
-                if not filename.lower().endswith(self.supported_extensions):
-                    continue
+                self.log_message("Copying image files to backup folder... (This may take a moment)")
                 
-                try:
-                    shutil.copy2(file_path, os.path.join(backup_dir, filename))
-                except Exception as e:
-                    self.log_message(f"Error backing up {filename}: {e}")
-            
-            self.log_message("Backup complete.")
+                for filename in os.listdir(folder_path):
+                    file_path = os.path.join(folder_path, filename)
+                    
+                    if os.path.isdir(file_path): 
+                        continue
+                    if not filename.lower().endswith(self.supported_extensions):
+                        continue
+                    
+                    try:
+                        shutil.copy2(file_path, os.path.join(backup_dir, filename))
+                    except Exception as e:
+                        self.log_message(f"Error backing up {filename}: {e}")
+                
+                self.log_message("Backup complete.")
 
-        self.log_message("Scanning for EXIF data and renaming...")
+        self.log_message("Scanning for EXIF data...")
         
         for filename in os.listdir(folder_path):
             file_path = os.path.join(folder_path, filename)
@@ -274,8 +298,6 @@ class PhotoOrganizerApp(ctk.CTk):
                 continue
                 
             _, ext = os.path.splitext(filename)
-            
-            # Extract Data
             exif_data = self.get_exif_data(file_path)
             
             if exif_data.get('date'):
@@ -287,9 +309,9 @@ class PhotoOrganizerApp(ctk.CTk):
                 if new_filename:
                     new_file_path = os.path.join(folder_path, new_filename)
                     
-                    # Handle duplicate names
+                    # Handle duplicate names using real AND virtual paths
                     counter = 1
-                    while os.path.exists(new_file_path):
+                    while os.path.exists(new_file_path) or new_file_path.lower() in projected_names:
                         if new_file_path.lower() == file_path.lower():
                             break 
                         
@@ -298,36 +320,55 @@ class PhotoOrganizerApp(ctk.CTk):
                         counter += 1
                     
                     if new_file_path.lower() != file_path.lower():
-                        try:
-                            os.rename(file_path, new_file_path)
-                            self.log_message(f"Renamed: {filename} -> {os.path.basename(new_file_path)}")
+                        # Add this name to our virtual memory to prevent collisions later in the loop
+                        projected_names.add(new_file_path.lower())
+                        
+                        if dry_run:
+                            self.log_message(f"Preview: {filename} -> {os.path.basename(new_file_path)}")
                             processed_count += 1
-                        except Exception as e:
-                            self.log_message(f"Error renaming {filename}: {e}")
-                            skipped_count += 1
+                        else:
+                            try:
+                                os.rename(file_path, new_file_path)
+                                self.log_message(f"Renamed: {filename} -> {os.path.basename(new_file_path)}")
+                                processed_count += 1
+                            except Exception as e:
+                                self.log_message(f"Error renaming {filename}: {e}")
+                                skipped_count += 1
+                    else:
+                        if dry_run:
+                            self.log_message(f"Unchanged (Already Correct): {filename}")
             else:
                 self.log_message(f"Skipped: {filename} (No EXIF date data)")
                 skipped_count += 1
 
         self.log_message(f"\n--- Done! ---")
-        self.log_message(f"Successfully renamed: {processed_count}")
+        if dry_run:
+            self.log_message(f"Files to rename: {processed_count}")
+        else:
+            self.log_message(f"Successfully renamed: {processed_count}")
+            
         self.log_message(f"Skipped (no EXIF): {skipped_count}")
         if ignored_count > 0:
             self.log_message(f"Ignored (non-image files): {ignored_count}")
 
         # Re-enable UI from the main thread
-        self.after(0, self.reset_ui_state)
+        self.after(0, lambda: self.reset_ui_state(dry_run))
 
-    def reset_ui_state(self):
+    def reset_ui_state(self, is_preview):
         self.browse_btn.configure(state="normal")
+        self.preview_btn.configure(state="normal")
         self.run_btn.configure(state="normal")
         self.backup_check.configure(state="normal")
         self.full_year_check.configure(state="normal")
         self.maker_check.configure(state="normal")
         self.model_check.configure(state="normal")
         self.theme_btn.configure(state="normal")
-        messagebox.showinfo("Complete", "Photo organization is finished!\nCheck the log for details.")
+        
+        if is_preview:
+            messagebox.showinfo("Preview Complete", "Preview generated!\nCheck the log to see how files will be renamed.")
+        else:
+            messagebox.showinfo("Complete", "Photo organization is finished!\nCheck the log for details.")
 
 if __name__ == "__main__":
     app = PhotoOrganizerApp()
-    app.mainloop()
+    app.mainloop()  
