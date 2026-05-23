@@ -18,7 +18,7 @@ class PhotoOrganizerApp(ctk.CTk):
 
         # Main window setup
         self.title("EXIF Photo Organizer")
-        self.geometry("620x680")
+        self.geometry("620x720") # Taller to fit the new option
         self.resizable(False, False)
 
         # Variables
@@ -27,8 +27,9 @@ class PhotoOrganizerApp(ctk.CTk):
         self.full_year_var = ctk.BooleanVar(value=False)
         self.maker_var = ctk.BooleanVar(value=False)
         self.model_var = ctk.BooleanVar(value=False)
+        self.preserve_modes_var = ctk.BooleanVar(value=False) # New Variable
         
-        self.supported_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+        self.supported_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng')
         self.is_dark_mode = True
 
         self.setup_ui()
@@ -101,7 +102,15 @@ class PhotoOrganizerApp(ctk.CTk):
             text="Append Camera Model (e.g., _Pixel 10 Pro)", 
             variable=self.model_var
         )
-        self.model_check.pack(anchor="w", padx=15, pady=(0, 15))
+        self.model_check.pack(anchor="w", padx=15, pady=(0, 10))
+
+        # NEW: Preserve Camera Modes Option
+        self.preserve_modes_check = ctk.CTkCheckBox(
+            self.options_frame, 
+            text="Preserve Camera Modes (e.g., .MP, .NIGHT, .PORTRAIT)", 
+            variable=self.preserve_modes_var
+        )
+        self.preserve_modes_check.pack(anchor="w", padx=15, pady=(0, 15))
 
         # Action Buttons (Side by Side)
         self.action_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -111,7 +120,7 @@ class PhotoOrganizerApp(ctk.CTk):
             self.action_frame, 
             text="Preview Changes", 
             height=40,
-            fg_color="#4B5563", hover_color="#374151", # Distinct gray color for preview
+            fg_color="#4B5563", hover_color="#374151",
             font=ctk.CTkFont(size=14, weight="bold"),
             command=self.start_preview, 
             state="disabled"
@@ -186,7 +195,16 @@ class PhotoOrganizerApp(ctk.CTk):
             pass
         return data
 
-    def generate_new_name(self, exif_data, original_extension, use_full_year, use_maker, use_model):
+    def extract_mode_identifier(self, filename):
+        """Finds Pixel/Samsung mode identifiers like .MP, .NIGHT, or _PORTRAIT"""
+        base_name, _ = os.path.splitext(filename)
+        # Regex searches for a dot or underscore followed by known keywords at the end of the filename
+        match = re.search(r'[\._](MP|PORTRAIT|PHOTOSPHERE|NIGHT|PANO|VR|BURST|COVER|MOTION)(~[0-9]+)?$', base_name, re.IGNORECASE)
+        if match:
+            return match.group(0) # Returns the exact match (e.g., ".MP" or "_PORTRAIT")
+        return ""
+
+    def generate_new_name(self, exif_data, original_extension, use_full_year, use_maker, use_model, mode_identifier=""):
         date_string = exif_data.get('date')
         if not date_string:
             return None
@@ -209,7 +227,8 @@ class PhotoOrganizerApp(ctk.CTk):
             if use_model and model:
                 suffix += f"_{model}"
 
-            return f"{base_name}{suffix}{original_extension.lower()}"
+            # Assemble everything: Date Base + Camera Suffix + Mode Identifier + Extension
+            return f"{base_name}{suffix}{mode_identifier}{original_extension.lower()}"
         except ValueError:
             return None
 
@@ -230,6 +249,7 @@ class PhotoOrganizerApp(ctk.CTk):
             'full_year': self.full_year_var.get(),
             'maker': self.maker_var.get(),
             'model': self.model_var.get(),
+            'preserve_modes': self.preserve_modes_var.get(),
             'dry_run': dry_run
         }
             
@@ -241,6 +261,7 @@ class PhotoOrganizerApp(ctk.CTk):
         self.full_year_check.configure(state="disabled")
         self.maker_check.configure(state="disabled")
         self.model_check.configure(state="disabled")
+        self.preserve_modes_check.configure(state="disabled")
         self.theme_btn.configure(state="disabled")
         
         mode_text = "PREVIEW MODE" if dry_run else "LIVE PROCESS"
@@ -257,7 +278,6 @@ class PhotoOrganizerApp(ctk.CTk):
         skipped_count = 0
         ignored_count = 0
         
-        # Virtual filesystem to track collisions during preview
         projected_names = set() 
         
         if do_backup:
@@ -300,10 +320,15 @@ class PhotoOrganizerApp(ctk.CTk):
             _, ext = os.path.splitext(filename)
             exif_data = self.get_exif_data(file_path)
             
+            # Extract Mode if requested
+            mode_id = ""
+            if settings['preserve_modes']:
+                mode_id = self.extract_mode_identifier(filename)
+            
             if exif_data.get('date'):
                 new_filename = self.generate_new_name(
                     exif_data, ext, 
-                    settings['full_year'], settings['maker'], settings['model']
+                    settings['full_year'], settings['maker'], settings['model'], mode_id
                 )
                 
                 if new_filename:
@@ -320,7 +345,6 @@ class PhotoOrganizerApp(ctk.CTk):
                         counter += 1
                     
                     if new_file_path.lower() != file_path.lower():
-                        # Add this name to our virtual memory to prevent collisions later in the loop
                         projected_names.add(new_file_path.lower())
                         
                         if dry_run:
@@ -362,6 +386,7 @@ class PhotoOrganizerApp(ctk.CTk):
         self.full_year_check.configure(state="normal")
         self.maker_check.configure(state="normal")
         self.model_check.configure(state="normal")
+        self.preserve_modes_check.configure(state="normal")
         self.theme_btn.configure(state="normal")
         
         if is_preview:
@@ -371,4 +396,4 @@ class PhotoOrganizerApp(ctk.CTk):
 
 if __name__ == "__main__":
     app = PhotoOrganizerApp()
-    app.mainloop()  
+    app.mainloop()
