@@ -3,7 +3,7 @@ import re
 import shutil
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import customtkinter as ctk
 from datetime import datetime
 from PIL import Image, ExifTags
@@ -12,14 +12,15 @@ from PIL import Image, ExifTags
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-class PhotoOrganizerApp(ctk.CTk):
+class MetaSortProApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
         # Main window setup
-        self.title("EXIF Photo Organizer")
-        self.geometry("620x720") # Taller to fit the new option
-        self.resizable(False, False)
+        self.title("MetaSort Pro")
+        self.geometry("650x760") 
+        self.minsize(550, 650)   
+        self.resizable(True, True) 
 
         # Variables
         self.folder_path = ctk.StringVar()
@@ -27,7 +28,7 @@ class PhotoOrganizerApp(ctk.CTk):
         self.full_year_var = ctk.BooleanVar(value=False)
         self.maker_var = ctk.BooleanVar(value=False)
         self.model_var = ctk.BooleanVar(value=False)
-        self.preserve_modes_var = ctk.BooleanVar(value=False) # New Variable
+        self.preserve_modes_var = ctk.BooleanVar(value=False)
         
         self.supported_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng')
         self.is_dark_mode = True
@@ -39,7 +40,7 @@ class PhotoOrganizerApp(ctk.CTk):
         self.top_bar = ctk.CTkFrame(self, fg_color="transparent")
         self.top_bar.pack(fill="x", padx=20, pady=(15, 5))
         
-        self.title_label = ctk.CTkLabel(self.top_bar, text="Photo Organizer", font=ctk.CTkFont(size=20, weight="bold"))
+        self.title_label = ctk.CTkLabel(self.top_bar, text="MetaSort Pro", font=ctk.CTkFont(size=22, weight="bold"))
         self.title_label.pack(side="left")
 
         self.theme_btn = ctk.CTkButton(
@@ -63,11 +64,11 @@ class PhotoOrganizerApp(ctk.CTk):
         self.path_container = ctk.CTkFrame(self.folder_frame, fg_color="transparent")
         self.path_container.pack(fill="x", padx=15, pady=10)
 
-        self.path_entry = ctk.CTkEntry(self.path_container, textvariable=self.folder_path, state='readonly', width=370)
+        self.path_entry = ctk.CTkEntry(self.path_container, textvariable=self.folder_path, state='readonly')
         self.path_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
         self.browse_btn = ctk.CTkButton(self.path_container, text="Browse...", width=100, command=self.browse_folder)
-        self.browse_btn.pack(side="left")
+        self.browse_btn.pack(side="right")
 
         # Frame 2: Options
         self.options_frame = ctk.CTkFrame(self)
@@ -104,7 +105,6 @@ class PhotoOrganizerApp(ctk.CTk):
         )
         self.model_check.pack(anchor="w", padx=15, pady=(0, 10))
 
-        # NEW: Preserve Camera Modes Option
         self.preserve_modes_check = ctk.CTkCheckBox(
             self.options_frame, 
             text="Preserve Camera Modes (e.g., .MP, .NIGHT, .PORTRAIT)", 
@@ -142,7 +142,16 @@ class PhotoOrganizerApp(ctk.CTk):
         self.log_label.pack(anchor="w", padx=20, pady=(0, 5))
 
         self.log_text = ctk.CTkTextbox(self, state="disabled", font=ctk.CTkFont(family="Consolas", size=12))
-        self.log_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self.log_text.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+        # Footer
+        self.footer_label = ctk.CTkLabel(
+            self, 
+            text="Developed by Fahim Hossain", 
+            font=ctk.CTkFont(size=11), 
+            text_color=("gray60", "gray40")
+        )
+        self.footer_label.pack(side="bottom", pady=(0, 10))
 
     def toggle_theme(self):
         if self.is_dark_mode:
@@ -196,12 +205,10 @@ class PhotoOrganizerApp(ctk.CTk):
         return data
 
     def extract_mode_identifier(self, filename):
-        """Finds Pixel/Samsung mode identifiers like .MP, .NIGHT, or _PORTRAIT"""
         base_name, _ = os.path.splitext(filename)
-        # Regex searches for a dot or underscore followed by known keywords at the end of the filename
         match = re.search(r'[\._](MP|PORTRAIT|PHOTOSPHERE|NIGHT|PANO|VR|BURST|COVER|MOTION)(~[0-9]+)?$', base_name, re.IGNORECASE)
         if match:
-            return match.group(0) # Returns the exact match (e.g., ".MP" or "_PORTRAIT")
+            return match.group(0) 
         return ""
 
     def generate_new_name(self, exif_data, original_extension, use_full_year, use_maker, use_model, mode_identifier=""):
@@ -227,7 +234,6 @@ class PhotoOrganizerApp(ctk.CTk):
             if use_model and model:
                 suffix += f"_{model}"
 
-            # Assemble everything: Date Base + Camera Suffix + Mode Identifier + Extension
             return f"{base_name}{suffix}{mode_identifier}{original_extension.lower()}"
         except ValueError:
             return None
@@ -253,7 +259,6 @@ class PhotoOrganizerApp(ctk.CTk):
             'dry_run': dry_run
         }
             
-        # Disable UI
         self.browse_btn.configure(state="disabled")
         self.preview_btn.configure(state="disabled")
         self.run_btn.configure(state="disabled")
@@ -320,7 +325,6 @@ class PhotoOrganizerApp(ctk.CTk):
             _, ext = os.path.splitext(filename)
             exif_data = self.get_exif_data(file_path)
             
-            # Extract Mode if requested
             mode_id = ""
             if settings['preserve_modes']:
                 mode_id = self.extract_mode_identifier(filename)
@@ -334,7 +338,6 @@ class PhotoOrganizerApp(ctk.CTk):
                 if new_filename:
                     new_file_path = os.path.join(folder_path, new_filename)
                     
-                    # Handle duplicate names using real AND virtual paths
                     counter = 1
                     while os.path.exists(new_file_path) or new_file_path.lower() in projected_names:
                         if new_file_path.lower() == file_path.lower():
@@ -375,7 +378,6 @@ class PhotoOrganizerApp(ctk.CTk):
         if ignored_count > 0:
             self.log_message(f"Ignored (non-image files): {ignored_count}")
 
-        # Re-enable UI from the main thread
         self.after(0, lambda: self.reset_ui_state(dry_run))
 
     def reset_ui_state(self, is_preview):
@@ -389,11 +391,12 @@ class PhotoOrganizerApp(ctk.CTk):
         self.preserve_modes_check.configure(state="normal")
         self.theme_btn.configure(state="normal")
         
+        # Popups removed! Notification handles entirely through the log.
         if is_preview:
-            messagebox.showinfo("Preview Complete", "Preview generated!\nCheck the log to see how files will be renamed.")
+            self.log_message("\n>>> Preview generation complete! Review the log above. <<<")
         else:
-            messagebox.showinfo("Complete", "Photo organization is finished!\nCheck the log for details.")
+            self.log_message("\n>>> Photo organization complete! <<<")
 
 if __name__ == "__main__":
-    app = PhotoOrganizerApp()
+    app = MetaSortProApp()
     app.mainloop()
