@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import threading
 import tkinter as tk
@@ -8,8 +9,8 @@ from datetime import datetime
 from PIL import Image, ExifTags
 
 # Set default CustomTkinter appearance
-ctk.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark", "Light"
-ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("blue")
 
 class PhotoOrganizerApp(ctk.CTk):
     def __init__(self):
@@ -17,12 +18,16 @@ class PhotoOrganizerApp(ctk.CTk):
 
         # Main window setup
         self.title("EXIF Photo Organizer")
-        self.geometry("600x550")
+        self.geometry("600x650") # Made slightly taller for new options
         self.resizable(False, False)
 
         # Variables
         self.folder_path = ctk.StringVar()
         self.backup_var = ctk.BooleanVar(value=True)
+        self.full_year_var = ctk.BooleanVar(value=False)
+        self.maker_var = ctk.BooleanVar(value=False)
+        self.model_var = ctk.BooleanVar(value=False)
+        
         self.supported_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
         self.is_dark_mode = True
 
@@ -75,7 +80,28 @@ class PhotoOrganizerApp(ctk.CTk):
             text="Copy existing photos to '.backup' folder before renaming", 
             variable=self.backup_var
         )
-        self.backup_check.pack(anchor="w", padx=15, pady=(0, 15))
+        self.backup_check.pack(anchor="w", padx=15, pady=(0, 10))
+
+        self.full_year_check = ctk.CTkCheckBox(
+            self.options_frame, 
+            text="Use Full Year (YYYY instead of YY)", 
+            variable=self.full_year_var
+        )
+        self.full_year_check.pack(anchor="w", padx=15, pady=(0, 10))
+
+        self.maker_check = ctk.CTkCheckBox(
+            self.options_frame, 
+            text="Append Camera Maker (e.g., _Google)", 
+            variable=self.maker_var
+        )
+        self.maker_check.pack(anchor="w", padx=15, pady=(0, 10))
+
+        self.model_check = ctk.CTkCheckBox(
+            self.options_frame, 
+            text="Append Camera Model (e.g., _Pixel 10 Pro)", 
+            variable=self.model_var
+        )
+        self.model_check.pack(anchor="w", padx=15, pady=(0, 15))
 
         # Action Button
         self.run_btn = ctk.CTkButton(
@@ -96,7 +122,6 @@ class PhotoOrganizerApp(ctk.CTk):
         self.log_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
     def toggle_theme(self):
-        """Toggles between Light and Dark mode using CTk built-ins."""
         if self.is_dark_mode:
             ctk.set_appearance_mode("Light")
             self.theme_btn.configure(text="🌙 Dark Mode")
@@ -114,32 +139,70 @@ class PhotoOrganizerApp(ctk.CTk):
             self.log_message(f"Selected folder: {folder}")
 
     def log_message(self, message):
-        """Helper to print messages to the GUI log safely."""
         self.log_text.configure(state="normal")
         self.log_text.insert("end", message + "\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
-    def get_date_taken(self, file_path):
+    def clean_filename_string(self, text):
+        """Removes null bytes and illegal Windows filename characters."""
+        if not text:
+            return ""
+        # Remove null bytes often left by camera firmware
+        text = str(text).replace('\x00', '').strip()
+        # Remove illegal Windows characters: < > : " / \ | ? *
+        text = re.sub(r'[<>:"/\\|?*]', '', text)
+        return text
+
+    def get_exif_data(self, file_path):
+        """Extracts Date Taken, Make, and Model from EXIF data."""
+        data = {'date': None, 'make': None, 'model': None}
         try:
             image = Image.open(file_path)
             exif = image._getexif()
             if not exif:
-                return None
+                return data
             
             for tag, value in exif.items():
                 decoded = ExifTags.TAGS.get(tag, tag)
                 if decoded == "DateTimeOriginal":
-                    return value
+                    data['date'] = value
+                elif decoded == "Make":
+                    data['make'] = self.clean_filename_string(value)
+                elif decoded == "Model":
+                    data['model'] = self.clean_filename_string(value)
         except Exception:
-            return None
-        return None
+            pass
+        return data
 
-    def generate_new_name(self, date_string, original_extension):
+    def generate_new_name(self, exif_data, original_extension, use_full_year, use_maker, use_model):
+        """Formats the new filename based on selected options."""
+        date_string = exif_data.get('date')
+        if not date_string:
+            return None
+            
         try:
             date_obj = datetime.strptime(date_string, "%Y:%m:%d %H:%M:%S")
-            new_name = date_obj.strftime("%y%m%d %H%M %S")
-            return f"{new_name}{original_extension.lower()}"
+            
+            # Determine Date Format
+            if use_full_year:
+                base_name = date_obj.strftime("%Y%m%d %H%M %S")
+            else:
+                base_name = date_obj.strftime("%y%m%d %H%M %S")
+            
+            # Build the suffix
+            suffix = ""
+            make = exif_data.get('make')
+            model = exif_data.get('model')
+
+            if use_maker and make:
+                # Remove spaces from the maker name (e.g., "Google" instead of "Google ")
+                suffix += f"_{make.replace(' ', '')}"
+                
+            if use_model and model:
+                suffix += f"_{model}"
+
+            return f"{base_name}{suffix}{original_extension.lower()}"
         except ValueError:
             return None
 
@@ -148,19 +211,30 @@ class PhotoOrganizerApp(ctk.CTk):
         if not folder:
             return
             
-        # Disable UI during processing
+        # Capture settings from UI before passing to the background thread
+        settings = {
+            'folder': folder,
+            'backup': self.backup_var.get(),
+            'full_year': self.full_year_var.get(),
+            'maker': self.maker_var.get(),
+            'model': self.model_var.get()
+        }
+            
+        # Disable UI
         self.browse_btn.configure(state="disabled")
         self.run_btn.configure(state="disabled")
         self.backup_check.configure(state="disabled")
+        self.full_year_check.configure(state="disabled")
+        self.maker_check.configure(state="disabled")
+        self.model_check.configure(state="disabled")
         self.theme_btn.configure(state="disabled")
         
         self.log_message("\n--- Starting Process ---")
-        
-        # Run heavy work on background thread
-        threading.Thread(target=self.process_photos, args=(folder,), daemon=True).start()
+        threading.Thread(target=self.process_photos, args=(settings,), daemon=True).start()
 
-    def process_photos(self, folder_path):
-        do_backup = self.backup_var.get()
+    def process_photos(self, settings):
+        folder_path = settings['folder']
+        do_backup = settings['backup']
         processed_count = 0
         skipped_count = 0
         ignored_count = 0
@@ -200,14 +274,20 @@ class PhotoOrganizerApp(ctk.CTk):
                 continue
                 
             _, ext = os.path.splitext(filename)
-            date_taken = self.get_date_taken(file_path)
             
-            if date_taken:
-                new_filename = self.generate_new_name(date_taken, ext)
+            # Extract Data
+            exif_data = self.get_exif_data(file_path)
+            
+            if exif_data.get('date'):
+                new_filename = self.generate_new_name(
+                    exif_data, ext, 
+                    settings['full_year'], settings['maker'], settings['model']
+                )
                 
                 if new_filename:
                     new_file_path = os.path.join(folder_path, new_filename)
                     
+                    # Handle duplicate names
                     counter = 1
                     while os.path.exists(new_file_path):
                         if new_file_path.lower() == file_path.lower():
@@ -226,7 +306,7 @@ class PhotoOrganizerApp(ctk.CTk):
                             self.log_message(f"Error renaming {filename}: {e}")
                             skipped_count += 1
             else:
-                self.log_message(f"Skipped: {filename} (No EXIF data)")
+                self.log_message(f"Skipped: {filename} (No EXIF date data)")
                 skipped_count += 1
 
         self.log_message(f"\n--- Done! ---")
@@ -242,6 +322,9 @@ class PhotoOrganizerApp(ctk.CTk):
         self.browse_btn.configure(state="normal")
         self.run_btn.configure(state="normal")
         self.backup_check.configure(state="normal")
+        self.full_year_check.configure(state="normal")
+        self.maker_check.configure(state="normal")
+        self.model_check.configure(state="normal")
         self.theme_btn.configure(state="normal")
         messagebox.showinfo("Complete", "Photo organization is finished!\nCheck the log for details.")
 
