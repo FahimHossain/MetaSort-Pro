@@ -17,6 +17,9 @@ class PhotoOrganizerApp:
         self.folder_path = tk.StringVar()
         self.backup_var = tk.BooleanVar(value=True) # Default to true for safety
         
+        # Define which file types the program should touch
+        self.supported_extensions = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+        
         self.setup_ui()
 
     def setup_ui(self):
@@ -113,6 +116,7 @@ class PhotoOrganizerApp:
         do_backup = self.backup_var.get()
         processed_count = 0
         skipped_count = 0
+        ignored_count = 0
         
         # 1. Handle Backup if requested
         if do_backup:
@@ -121,15 +125,18 @@ class PhotoOrganizerApp:
                 os.makedirs(backup_dir)
                 self.log_message("Created .backup folder.")
             
-            self.log_message("Copying files to backup folder... (This may take a moment)")
+            self.log_message("Copying image files to backup folder... (This may take a moment)")
             
             for filename in os.listdir(folder_path):
                 file_path = os.path.join(folder_path, filename)
+                
+                # Skip folders and non-image files
                 if os.path.isdir(file_path): 
-                    continue # Don't copy folders
+                    continue
+                if not filename.lower().endswith(self.supported_extensions):
+                    continue
                 
                 try:
-                    # shutil.copy2 preserves original metadata like creation dates
                     shutil.copy2(file_path, os.path.join(backup_dir, filename))
                 except Exception as e:
                     self.log_message(f"Error backing up {filename}: {e}")
@@ -142,8 +149,13 @@ class PhotoOrganizerApp:
         for filename in os.listdir(folder_path):
             file_path = os.path.join(folder_path, filename)
             
-            # Skip directories (including the .backup folder we just made)
+            # Skip directories
             if os.path.isdir(file_path):
+                continue
+            
+            # Skip non-image files
+            if not filename.lower().endswith(self.supported_extensions):
+                ignored_count += 1
                 continue
                 
             _, ext = os.path.splitext(filename)
@@ -179,7 +191,9 @@ class PhotoOrganizerApp:
 
         self.log_message(f"\n--- Done! ---")
         self.log_message(f"Successfully renamed: {processed_count}")
-        self.log_message(f"Skipped: {skipped_count}")
+        self.log_message(f"Skipped (no EXIF): {skipped_count}")
+        if ignored_count > 0:
+            self.log_message(f"Ignored (non-image files): {ignored_count}")
 
         # Re-enable UI from the main thread
         self.root.after(0, self.reset_ui_state)
