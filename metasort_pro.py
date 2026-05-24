@@ -2,11 +2,12 @@ import os
 import re
 import json
 import threading
+import ctypes
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from datetime import datetime
-from PIL import Image, ExifTags
+from PIL import Image, ImageTk, ExifTags
 
 # Set default CustomTkinter appearance
 ctk.set_appearance_mode("Dark")
@@ -18,13 +19,36 @@ class MetaSortProApp(ctk.CTk):
 
         # Main window setup
         self.title("MetaSort Pro v2.0")
+        
+        # --- ICON FIX ---
+        # 1. Tell Windows this is a unique app (forces Taskbar icon to update)
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('fahim.metasort.pro.2.0')
+        except Exception:
+            pass
+            
+        # 2. Find the icon exactly where the script lives
+        icon_path = os.path.join(os.path.dirname(__file__), "MetaSort Pro.ico")
+        
+        # 3. Apply the CustomTkinter Workaround
+        if os.path.exists(icon_path):
+            try:
+                self.app_icon = ImageTk.PhotoImage(Image.open(icon_path))
+                self.wm_iconbitmap() # Clear CTk's default internal icon buffer
+                self.after(200, lambda: self.iconphoto(False, self.app_icon)) # Apply after CTk draws the dark title bar
+            except Exception as e:
+                print(f"Warning: Failed to load icon: {e}")
+        else:
+            print(f"Warning: Icon not found at {icon_path}")
+        # ----------------
+
         self.geometry("680x820") 
         self.minsize(600, 750)   
         self.resizable(True, True) 
 
         # Variables
         self.folder_path = ctk.StringVar()
-        self.enable_undo_var = ctk.BooleanVar(value=True) # Replaced backup_var
+        self.enable_undo_var = ctk.BooleanVar(value=True)
         self.full_year_var = ctk.BooleanVar(value=False)
         self.maker_var = ctk.BooleanVar(value=False)
         self.model_var = ctk.BooleanVar(value=False)
@@ -105,7 +129,7 @@ class MetaSortProApp(ctk.CTk):
 
         self.model_check = ctk.CTkCheckBox(
             self.options_frame, 
-            text="Append Camera Model (e.g., _Pixel 6) [Images Only]", 
+            text="Append Camera Model (e.g., _Pixel 10 Pro) [Images Only]", 
             variable=self.model_var
         )
         self.model_check.pack(anchor="w", padx=15, pady=(0, 10))
