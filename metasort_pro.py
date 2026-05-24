@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import json
 import threading
@@ -58,7 +59,7 @@ class MediaEngine:
     @staticmethod
     def extract_mode(filename):
         base_name = os.path.splitext(filename)[0]
-        match = re.search(r'[\._](MP|PORTRAIT|PORTRAIT.ORIGINAL|PHOTOSPHERE|NIGHT|PANO|VR|BURST|COVER|MOTION)(~[0-9]+)?$', base_name, re.IGNORECASE)
+        match = re.search(r'[\._](MP|PORTRAIT|PORTRAIT\.ORIGINAL|PHOTOSPHERE|NIGHT|PANO|VR|BURST|COVER|MOTION)(~[0-9]+)?$', base_name, re.IGNORECASE)
         return match.group(0) if match else ""
 
     @staticmethod
@@ -135,8 +136,7 @@ class MetaSortProApp(ctk.CTk):
         self.title("MetaSort Pro v2.0")
         self.geometry("680x820") 
         self.minsize(600, 750)
-        self._setup_window_icon()
-
+        
         # Variables
         self.folder_path = ctk.StringVar()
         self.settings = {
@@ -148,6 +148,7 @@ class MetaSortProApp(ctk.CTk):
         }
         self.is_dark_mode = True
 
+        self._setup_window_icon()
         self._build_ui()
 
     def _setup_window_icon(self):
@@ -155,7 +156,16 @@ class MetaSortProApp(ctk.CTk):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('fahim.metasort.pro.2.0')
         except Exception: pass
             
-        icon_path = os.path.join(os.path.dirname(__file__), "MetaSort Pro.ico")
+        # --- PyInstaller Compatibility Fix ---
+        if getattr(sys, 'frozen', False):
+            # If running as a compiled .exe, look in the temp extraction folder
+            base_path = sys._MEIPASS
+        else:
+            # If running as a normal Python script, look in the current folder
+            base_path = os.path.dirname(__file__)
+        # -------------------------------------
+
+        icon_path = os.path.join(base_path, "MetaSort Pro.ico")
         if os.path.exists(icon_path):
             self.app_icon = ImageTk.PhotoImage(Image.open(icon_path))
             self.wm_iconbitmap() 
@@ -344,7 +354,7 @@ class MetaSortProApp(ctk.CTk):
 
     def _finalize_run(self, dry_run, stats):
         self.log("\n--- Done! ---")
-        self.log(f"{'Files to rename     ' if dry_run else 'Successfully renamed'}:          {stats['processed']}")
+        self.log(f"{'Files to rename      ' if dry_run else 'Successfully renamed'}:          {stats['processed']}")
         self.log(f"Skipped (already correct):     {stats['already_correct']}")
         self.log(f"Skipped (no date data):        {stats['skipped']}")
         if stats['ignored']: self.log(f"Ignored (unsupported files):   {stats['ignored']}")
