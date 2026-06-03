@@ -7,6 +7,7 @@ import ctypes
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
+from tkinterdnd2 import TkinterDnD, DND_FILES
 from datetime import datetime
 from PIL import Image, ImageTk, ExifTags
 
@@ -129,28 +130,29 @@ class UndoManager:
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-class MetaSortProApp(ctk.CTk):
+class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def __init__(self):
         super().__init__()
         
-        self.title("MetaSort Pro v2.0")
+        # Initialize Drag and Drop functionality
+        self.TkdndVersion = TkinterDnD._require(self)
+        
+        self.title("MetaSort Pro")
         self.geometry("680x820") 
         self.minsize(600, 750)
         self._setup_window_icon()
 
         # Variables
         self.folder_path = ctk.StringVar()
+        self.specific_files = [] # Tracks individually dropped files
         
-        # --- NEW LOGIC: Set Default Target Folder to Execution Directory ---
+        # Set Default Target Folder to Execution Directory
         if getattr(sys, 'frozen', False):
-            # If running as a compiled .exe
             default_folder = os.path.dirname(sys.executable)
         else:
-            # If running as a standard python script
             default_folder = os.path.dirname(os.path.abspath(__file__))
             
         self.folder_path.set(default_folder)
-        # -------------------------------------------------------------------
 
         self.settings = {
             'enable_undo': ctk.BooleanVar(value=True),
@@ -162,6 +164,10 @@ class MetaSortProApp(ctk.CTk):
         self.is_dark_mode = True
 
         self._build_ui()
+        
+        # Register window as a drop target
+        self.drop_target_register(DND_FILES)
+        self.dnd_bind('<<Drop>>', self.handle_drop)
 
     def _setup_window_icon(self):
         try:
@@ -195,7 +201,7 @@ class MetaSortProApp(ctk.CTk):
     def _build_folder_selector(self):
         frame = ctk.CTkFrame(self)
         frame.pack(fill="x", padx=20, pady=10)
-        ctk.CTkLabel(frame, text="Step 1: Select Target Folder", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 0))
+        ctk.CTkLabel(frame, text="Step 1: Select Folder (Or Drag & Drop Files/Folders anywhere)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 0))
         
         container = ctk.CTkFrame(frame, fg_color="transparent")
         container.pack(fill="x", padx=15, pady=10)
@@ -226,7 +232,6 @@ class MetaSortProApp(ctk.CTk):
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="x", padx=20, pady=10)
         
-        # Changed state from "disabled" to "normal" since we have a default folder now
         self.preview_btn = ctk.CTkButton(frame, text="Preview Changes", height=40, fg_color="#4B5563", hover_color="#374151", 
                                          font=ctk.CTkFont(size=14, weight="bold"), state="normal", command=lambda: self._start_thread(True))
         self.preview_btn.pack(side="left", fill="x", expand=True, padx=(0, 10))
@@ -239,7 +244,6 @@ class MetaSortProApp(ctk.CTk):
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="x", padx=20, pady=(0, 10))
         
-        # Changed state from "disabled" to "normal" since we have a default folder now
         self.undo_last_btn = ctk.CTkButton(frame, text="↩ Undo Last Session", height=30, fg_color="#991B1B", 
                                            hover_color="#7F1D1D", state="normal", command=self.undo_last_session)
         self.undo_last_btn.pack(side="left", fill="x", expand=True, padx=(0, 10))
@@ -256,6 +260,38 @@ class MetaSortProApp(ctk.CTk):
 
     # --- Interaction Logic ---
 
+    def handle_drop(self, event):
+        # tk.splitlist cleanly separates paths, even those with spaces
+        raw_paths = self.tk.splitlist(event.data)
+        paths = [os.path.normpath(p) for p in raw_paths]
+        
+        if not paths: return
+        
+        # Case 1: A single folder is dropped
+        if len(paths) == 1 and os.path.isdir(paths[0]):
+            self.folder_path.set(paths[0])
+            self.specific_files = [] # Clear specific files since we're doing a full folder scan
+            self.log(f"Dropped folder: {paths[0]}")
+            
+        # Case 2: Files (or a mix) are dropped
+        else:
+            # Filter out unsupported extensions
+            valid_files = [p for p in paths if os.path.isfile(p) and p.lower().endswith(MediaEngine.SUPPORTED_EXTS)]
+            
+            if not valid_files:
+                self.log("No supported files dropped.")
+                return
+            
+            self.specific_files = valid_files
+            parent_dir = os.path.dirname(valid_files[0])
+            
+            # Set the visible entry path to the parent directory of the first file 
+            # so the undo log has a logical place to save.
+            self.folder_path.set(parent_dir) 
+            self.log(f"Dropped {len(valid_files)} specific file(s) for processing.")
+            
+        self.toggle_ui_state("normal")
+
     def log(self, message):
         self.log_text.configure(state="normal")
         self.log_text.insert("end", message + "\n")
@@ -270,6 +306,7 @@ class MetaSortProApp(ctk.CTk):
     def browse_folder(self):
         if folder := filedialog.askdirectory(title="Select Folder with Media"):
             self.folder_path.set(folder)
+            self.specific_files = [] # Clear specific files on manual browse
             self.toggle_ui_state("normal")
             self.log(f"Selected folder: {folder}")
 
@@ -297,12 +334,20 @@ class MetaSortProApp(ctk.CTk):
         projected_names = set() 
         session_changes = [] 
         
-        self.log(f"Target Directory: {folder}")
-        self.log("Scanning for metadata...")
+        # Decide whether to process the whole folder or specific dropped files
+        if self.specific_files:
+            target_paths = self.specific_files
+            self.log(f"Processing {len(target_paths)} individually selected file(s)...")
+        else:
+            target_paths = [os.path.join(folder, f) for f in os.listdir(folder)]
+            self.log(f"Target Directory: {folder}")
+            self.log("Scanning for metadata...")
         
-        for filename in os.listdir(folder):
-            path = os.path.join(folder, filename)
+        for path in target_paths:
             if os.path.isdir(path): continue
+            
+            filename = os.path.basename(path)
+            file_dir = os.path.dirname(path) # Get exact directory of the file
             
             if not filename.lower().endswith(MediaEngine.SUPPORTED_EXTS):
                 stats['ignored'] += 1
@@ -319,7 +364,8 @@ class MetaSortProApp(ctk.CTk):
             new_filename = MediaEngine.generate_name(media_data, ext, run_settings, mode_id)
             if not new_filename: continue
 
-            new_path = self._resolve_duplicate_name(folder, new_filename, path, projected_names, ext)
+            # Resolve duplicate against the specific file's directory
+            new_path = self._resolve_duplicate_name(file_dir, new_filename, path, projected_names, ext)
             
             if new_path.lower() != path.lower():
                 projected_names.add(new_path.lower())
@@ -353,7 +399,8 @@ class MetaSortProApp(ctk.CTk):
             try:
                 os.rename(old_path, new_path)
                 self.log(f"Renamed: {old_name} -> {new_name}")
-                session_changes.append({"old": old_name, "new": new_name})
+                # Store full absolute paths for bulletproof undos
+                session_changes.append({"old_path": old_path, "new_path": new_path, "old": old_name, "new": new_name})
                 stats['processed'] += 1
             except Exception as e:
                 self.log(f"Error renaming {old_name}: {e}")
@@ -414,19 +461,22 @@ class MetaSortProApp(ctk.CTk):
         
         success, fail = 0, 0
         for change in reversed(target_session["changes"]):
-            old_path = os.path.join(folder, change["old"])
-            new_path = os.path.join(folder, change["new"])
+            # Rely on the absolute paths we saved, preventing cross-folder bugs
+            # We fallback to the old method of os.path.join just in case you try to undo 
+            # a log made before this code update
+            old_path = change.get("old_path", os.path.join(folder, change.get("old", ""))) 
+            new_path = change.get("new_path", os.path.join(folder, change.get("new", "")))
             
             if os.path.exists(new_path):
                 try:
                     os.rename(new_path, old_path)
-                    self.log(f"Reverted: {change['new']} -> {change['old']}")
+                    self.log(f"Reverted: {os.path.basename(new_path)} -> {os.path.basename(old_path)}")
                     success += 1
                 except Exception as e:
-                    self.log(f"Error reverting {change['new']}: {e}")
+                    self.log(f"Error reverting {os.path.basename(new_path)}: {e}")
                     fail += 1
             else:
-                self.log(f"File missing, cannot revert: {change['new']}")
+                self.log(f"File missing, cannot revert: {os.path.basename(new_path)}")
                 fail += 1
                 
         UndoManager.update_history(folder, data)
