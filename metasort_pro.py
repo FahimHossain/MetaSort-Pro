@@ -2,8 +2,11 @@ import os
 import re
 import sys
 import json
+import time
 import threading
 import ctypes
+import hashlib
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -83,6 +86,18 @@ class MediaEngine:
         except ValueError:
             return None
 
+    @staticmethod
+    def get_partial_hash(file_path, chunk_size=1024*1024):
+        """Generates an MD5 hash of the first 1MB of a file for fast duplicate checking."""
+        hasher = hashlib.md5()
+        try:
+            with open(file_path, 'rb') as f:
+                chunk = f.read(chunk_size)
+                hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception:
+            return None
+
 
 # ==========================================
 # BACKEND: Undo Log Manager
@@ -137,9 +152,9 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Initialize Drag and Drop functionality
         self.TkdndVersion = TkinterDnD._require(self)
         
-        self.title("MetaSort Pro")
-        self.geometry("680x820") 
-        self.minsize(600, 750)
+        self.title("MetaSort Pro v3.0")
+        self.geometry("720x860") 
+        self.minsize(650, 800)
         self._setup_window_icon()
 
         # Variables
@@ -171,7 +186,7 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _setup_window_icon(self):
         try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('fahim.metasort.pro.2.0')
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('fahim.metasort.pro.3.0')
         except Exception: pass
             
         icon_path = os.path.join(os.path.dirname(__file__), "MetaSort Pro.ico")
@@ -187,6 +202,7 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._build_folder_selector()
         self._build_options()
         self._build_action_buttons()
+        self._build_progress_bar()
         self._build_undo_controls()
         self._build_console()
 
@@ -230,7 +246,7 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _build_action_buttons(self):
         frame = ctk.CTkFrame(self, fg_color="transparent")
-        frame.pack(fill="x", padx=20, pady=10)
+        frame.pack(fill="x", padx=20, pady=(10, 5))
         
         self.preview_btn = ctk.CTkButton(frame, text="Preview Changes", height=40, fg_color="#4B5563", hover_color="#374151", 
                                          font=ctk.CTkFont(size=14, weight="bold"), state="normal", command=lambda: self._start_thread(True))
@@ -239,6 +255,17 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.run_btn = ctk.CTkButton(frame, text="Apply Changes", height=40, font=ctk.CTkFont(size=14, weight="bold"), 
                                      state="normal", command=lambda: self._start_thread(False))
         self.run_btn.pack(side="right", fill="x", expand=True, padx=(10, 0))
+
+    def _build_progress_bar(self):
+        self.progress_frame = ctk.CTkFrame(self, fg_color="transparent", height=20)
+        self.progress_frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        self.progress_bar = ctk.CTkProgressBar(self.progress_frame, mode="determinate")
+        self.progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.progress_bar.set(0)
+        
+        self.progress_label = ctk.CTkLabel(self.progress_frame, text="0% | Idle", width=120, anchor="e")
+        self.progress_label.pack(side="right")
 
     def _build_undo_controls(self):
         frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -261,32 +288,23 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
     # --- Interaction Logic ---
 
     def handle_drop(self, event):
-        # tk.splitlist cleanly separates paths, even those with spaces
         raw_paths = self.tk.splitlist(event.data)
         paths = [os.path.normpath(p) for p in raw_paths]
         
         if not paths: return
         
-        # Case 1: A single folder is dropped
         if len(paths) == 1 and os.path.isdir(paths[0]):
             self.folder_path.set(paths[0])
-            self.specific_files = [] # Clear specific files since we're doing a full folder scan
+            self.specific_files = [] 
             self.log(f"Dropped folder: {paths[0]}")
-            
-        # Case 2: Files (or a mix) are dropped
         else:
-            # Filter out unsupported extensions
             valid_files = [p for p in paths if os.path.isfile(p) and p.lower().endswith(MediaEngine.SUPPORTED_EXTS)]
-            
             if not valid_files:
                 self.log("No supported files dropped.")
                 return
             
             self.specific_files = valid_files
             parent_dir = os.path.dirname(valid_files[0])
-            
-            # Set the visible entry path to the parent directory of the first file 
-            # so the undo log has a logical place to save.
             self.folder_path.set(parent_dir) 
             self.log(f"Dropped {len(valid_files)} specific file(s) for processing.")
             
@@ -306,13 +324,17 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def browse_folder(self):
         if folder := filedialog.askdirectory(title="Select Folder with Media"):
             self.folder_path.set(folder)
-            self.specific_files = [] # Clear specific files on manual browse
+            self.specific_files = [] 
             self.toggle_ui_state("normal")
             self.log(f"Selected folder: {folder}")
 
     def toggle_ui_state(self, state):
         for widget in [self.browse_btn, self.preview_btn, self.run_btn, self.undo_last_btn, self.undo_hist_btn, self.theme_btn] + self.option_widgets:
             widget.configure(state=state)
+
+    def update_progress(self, val, text_val):
+        self.progress_bar.set(val)
+        self.progress_label.configure(text=text_val)
 
     def _start_thread(self, dry_run):
         if not self.folder_path.get(): return
@@ -321,6 +343,7 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
         current_settings['dry_run'] = dry_run
         
         self.toggle_ui_state("disabled")
+        self.update_progress(0, "0% | Calculating...")
         self.log(f"\n--- Starting Process ({'PREVIEW' if dry_run else 'LIVE'}) ---")
         threading.Thread(target=self.process_media, args=(current_settings,), daemon=True).start()
 
@@ -329,12 +352,11 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def process_media(self, run_settings):
         folder = self.folder_path.get()
         dry_run = run_settings['dry_run']
-        stats = {'processed': 0, 'skipped': 0, 'ignored': 0, 'already_correct': 0}
+        stats = {'processed': 0, 'skipped': 0, 'ignored': 0, 'already_correct': 0, 'duplicates': 0}
         
-        projected_names = set() 
+        projected_paths = {} # Maps new_path.lower() -> original_path to track collisions mid-run
         session_changes = [] 
         
-        # Decide whether to process the whole folder or specific dropped files
         if self.specific_files:
             target_paths = self.specific_files
             self.log(f"Processing {len(target_paths)} individually selected file(s)...")
@@ -343,14 +365,20 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.log(f"Target Directory: {folder}")
             self.log("Scanning for metadata...")
         
-        for path in target_paths:
-            if os.path.isdir(path): continue
+        total_files = len(target_paths)
+        start_time = time.time()
+
+        for i, path in enumerate(target_paths):
+            if os.path.isdir(path): 
+                self._update_progress_ui(i, total_files, start_time)
+                continue
             
             filename = os.path.basename(path)
-            file_dir = os.path.dirname(path) # Get exact directory of the file
+            file_dir = os.path.dirname(path) 
             
             if not filename.lower().endswith(MediaEngine.SUPPORTED_EXTS):
                 stats['ignored'] += 1
+                self._update_progress_ui(i, total_files, start_time)
                 continue
                 
             media_data, ext = MediaEngine.get_metadata(path)
@@ -359,36 +387,115 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
             if not media_data.get('date'):
                 self.log(f"Skipped: {filename} (No date found)")
                 stats['skipped'] += 1
+                self._update_progress_ui(i, total_files, start_time)
                 continue
 
             new_filename = MediaEngine.generate_name(media_data, ext, run_settings, mode_id)
-            if not new_filename: continue
+            if not new_filename: 
+                self._update_progress_ui(i, total_files, start_time)
+                continue
 
-            # Resolve duplicate against the specific file's directory
-            new_path = self._resolve_duplicate_name(file_dir, new_filename, path, projected_names, ext)
+            new_path, is_duplicate = self._resolve_path_and_duplicates(file_dir, new_filename, path, projected_paths, ext)
             
+            if is_duplicate:
+                stats['duplicates'] += 1
+                if dry_run:
+                    self.log(f"Preview: True Duplicate -> {filename} will be moved to /Duplicates")
+                else:
+                    dup_folder = os.path.join(file_dir, "Duplicates")
+                    os.makedirs(dup_folder, exist_ok=True)
+                    
+                    # Ensure duplicate doesn't overwrite another file in the Duplicates folder
+                    base, ex = os.path.splitext(filename)
+                    dup_target = os.path.join(dup_folder, filename)
+                    c = 1
+                    while os.path.exists(dup_target):
+                        dup_target = os.path.join(dup_folder, f"{base}_{c}{ex}")
+                        c += 1
+                        
+                    try:
+                        shutil.move(path, dup_target)
+                        self.log(f"Moved Duplicate: {filename} -> Duplicates/{os.path.basename(dup_target)}")
+                        session_changes.append({"old_path": path, "new_path": dup_target, "old": filename, "new": f"Duplicates/{os.path.basename(dup_target)}"})
+                    except Exception as e:
+                        self.log(f"Error moving duplicate {filename}: {e}")
+                        
+                self._update_progress_ui(i, total_files, start_time)
+                continue
+
             if new_path.lower() != path.lower():
-                projected_names.add(new_path.lower())
+                projected_paths[new_path.lower()] = path
                 self._apply_rename(path, new_path, filename, dry_run, session_changes, stats)
             else:
                 stats['already_correct'] += 1
                 if dry_run:
                     self.log(f"Unchanged (Already Correct): {filename}")
 
+            self._update_progress_ui(i, total_files, start_time)
+
         if not dry_run and run_settings['enable_undo'] and session_changes:
             UndoManager.save_session(folder, session_changes)
 
         self._finalize_run(dry_run, stats)
 
-    def _resolve_duplicate_name(self, folder, target_name, original_path, projected_set, ext):
-        new_path = os.path.join(folder, target_name)
+    def _update_progress_ui(self, current_index, total_files, start_time):
+        progress_val = (current_index + 1) / total_files if total_files > 0 else 1
+        percentage = int(progress_val * 100)
+        
+        elapsed = time.time() - start_time
+        if current_index > 0:
+            eta_seconds = (elapsed / current_index) * (total_files - current_index)
+            eta_str = f"ETA: {int(eta_seconds)}s"
+        else:
+            eta_str = "Calculating..."
+
+        self.after(0, lambda: self.update_progress(progress_val, f"{percentage}% | {eta_str}"))
+
+    def _resolve_path_and_duplicates(self, file_dir, target_name, original_path, projected_paths, ext):
+        new_path = os.path.join(file_dir, target_name)
+
+        if new_path.lower() == original_path.lower():
+            return new_path, False
+
+        current_size = None
+        current_hash = None
         counter = 1
-        while os.path.exists(new_path) or new_path.lower() in projected_set:
-            if new_path.lower() == original_path.lower(): break 
-            base_no_ext = os.path.splitext(target_name)[0]
-            new_path = os.path.join(folder, f"{base_no_ext}_{counter}{ext.lower()}")
+        base_no_ext = os.path.splitext(target_name)[0]
+
+        while True:
+            conflict_path = None
+            if os.path.exists(new_path):
+                conflict_path = new_path
+            elif new_path.lower() in projected_paths:
+                conflict_path = projected_paths[new_path.lower()]
+
+            if not conflict_path:
+                break # Found a free name
+
+            if conflict_path.lower() == original_path.lower():
+                break
+
+            # Collision! Check if it's a true duplicate
+            try:
+                if current_size is None:
+                    current_size = os.path.getsize(original_path)
+                conflict_size = os.path.getsize(conflict_path)
+
+                if current_size == conflict_size:
+                    if current_hash is None:
+                        current_hash = MediaEngine.get_partial_hash(original_path)
+                    conflict_hash = MediaEngine.get_partial_hash(conflict_path)
+
+                    if current_hash and conflict_hash and current_hash == conflict_hash:
+                        return None, True # Signal it's a true duplicate
+            except Exception:
+                pass # Fall through to generate a numbered suffix if we can't read
+
+            # It's not a true duplicate, increment counter and try again
+            new_path = os.path.join(file_dir, f"{base_no_ext}_{counter}{ext.lower()}")
             counter += 1
-        return new_path
+
+        return new_path, False
 
     def _apply_rename(self, old_path, new_path, old_name, dry_run, session_changes, stats):
         new_name = os.path.basename(new_path)
@@ -399,7 +506,6 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
             try:
                 os.rename(old_path, new_path)
                 self.log(f"Renamed: {old_name} -> {new_name}")
-                # Store full absolute paths for bulletproof undos
                 session_changes.append({"old_path": old_path, "new_path": new_path, "old": old_name, "new": new_name})
                 stats['processed'] += 1
             except Exception as e:
@@ -409,10 +515,12 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _finalize_run(self, dry_run, stats):
         self.log("\n--- Done! ---")
         self.log(f"{'Files to rename' if dry_run else 'Successfully renamed'}: {stats['processed']}")
+        if stats['duplicates']: self.log(f"{'Duplicates found' if dry_run else 'Duplicates moved to /Duplicates'}: {stats['duplicates']}")
         self.log(f"Skipped (already correct): {stats['already_correct']}")
         self.log(f"Skipped (no date data): {stats['skipped']}")
         if stats['ignored']: self.log(f"Ignored (unsupported files): {stats['ignored']}")
         
+        self.after(0, lambda: self.update_progress(1.0, "100% | Done"))
         self.after(0, lambda: self.toggle_ui_state("normal"))
         self.after(0, lambda: self.log("\n>>> Process Complete <<<"))
 
@@ -461,15 +569,13 @@ class MetaSortProApp(ctk.CTk, TkinterDnD.DnDWrapper):
         
         success, fail = 0, 0
         for change in reversed(target_session["changes"]):
-            # Rely on the absolute paths we saved, preventing cross-folder bugs
-            # We fallback to the old method of os.path.join just in case you try to undo 
-            # a log made before this code update
             old_path = change.get("old_path", os.path.join(folder, change.get("old", ""))) 
             new_path = change.get("new_path", os.path.join(folder, change.get("new", "")))
             
             if os.path.exists(new_path):
                 try:
-                    os.rename(new_path, old_path)
+                    # Use shutil.move to handle files returning from the /Duplicates directory gracefully
+                    shutil.move(new_path, old_path)
                     self.log(f"Reverted: {os.path.basename(new_path)} -> {os.path.basename(old_path)}")
                     success += 1
                 except Exception as e:
