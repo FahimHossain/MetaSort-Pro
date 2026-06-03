@@ -1,6 +1,6 @@
 import os
-import sys
 import re
+import sys
 import json
 import threading
 import ctypes
@@ -59,7 +59,7 @@ class MediaEngine:
     @staticmethod
     def extract_mode(filename):
         base_name = os.path.splitext(filename)[0]
-        match = re.search(r'[\._](MP|PORTRAIT|PORTRAIT\.ORIGINAL|PHOTOSPHERE|NIGHT|PANO|VR|BURST|COVER|MOTION)(~[0-9]+)?$', base_name, re.IGNORECASE)
+        match = re.search(r'[\._](MP|PORTRAIT|PHOTOSPHERE|NIGHT|PANO|VR|BURST|COVER|MOTION)(~[0-9]+)?$', base_name, re.IGNORECASE)
         return match.group(0) if match else ""
 
     @staticmethod
@@ -136,9 +136,22 @@ class MetaSortProApp(ctk.CTk):
         self.title("MetaSort Pro v2.0")
         self.geometry("680x820") 
         self.minsize(600, 750)
-        
+        self._setup_window_icon()
+
         # Variables
         self.folder_path = ctk.StringVar()
+        
+        # --- NEW LOGIC: Set Default Target Folder to Execution Directory ---
+        if getattr(sys, 'frozen', False):
+            # If running as a compiled .exe
+            default_folder = os.path.dirname(sys.executable)
+        else:
+            # If running as a standard python script
+            default_folder = os.path.dirname(os.path.abspath(__file__))
+            
+        self.folder_path.set(default_folder)
+        # -------------------------------------------------------------------
+
         self.settings = {
             'enable_undo': ctk.BooleanVar(value=True),
             'full_year': ctk.BooleanVar(value=False),
@@ -148,7 +161,6 @@ class MetaSortProApp(ctk.CTk):
         }
         self.is_dark_mode = True
 
-        self._setup_window_icon()
         self._build_ui()
 
     def _setup_window_icon(self):
@@ -156,16 +168,7 @@ class MetaSortProApp(ctk.CTk):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('fahim.metasort.pro.2.0')
         except Exception: pass
             
-        # --- PyInstaller Compatibility Fix ---
-        if getattr(sys, 'frozen', False):
-            # If running as a compiled .exe, look in the temp extraction folder
-            base_path = sys._MEIPASS
-        else:
-            # If running as a normal Python script, look in the current folder
-            base_path = os.path.dirname(__file__)
-        # -------------------------------------
-
-        icon_path = os.path.join(base_path, "MetaSort Pro.ico")
+        icon_path = os.path.join(os.path.dirname(__file__), "MetaSort Pro.ico")
         if os.path.exists(icon_path):
             self.app_icon = ImageTk.PhotoImage(Image.open(icon_path))
             self.wm_iconbitmap() 
@@ -192,7 +195,7 @@ class MetaSortProApp(ctk.CTk):
     def _build_folder_selector(self):
         frame = ctk.CTkFrame(self)
         frame.pack(fill="x", padx=20, pady=10)
-        ctk.CTkLabel(frame, text="Select Target Folder", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 0))
+        ctk.CTkLabel(frame, text="Step 1: Select Target Folder", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 0))
         
         container = ctk.CTkFrame(frame, fg_color="transparent")
         container.pack(fill="x", padx=15, pady=10)
@@ -203,13 +206,13 @@ class MetaSortProApp(ctk.CTk):
     def _build_options(self):
         frame = ctk.CTkFrame(self)
         frame.pack(fill="x", padx=20, pady=5)
-        ctk.CTkLabel(frame, text="Options", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(frame, text="Step 2: Options", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         options = [
             ("Enable Undo Log (Creates .metasort_undo.json)", self.settings['enable_undo']),
             ("Use Full Year (YYYY instead of YY)", self.settings['full_year']),
             ("Append Camera Maker (e.g., _Google) [Images Only]", self.settings['maker']),
-            ("Append Camera Model (e.g., _Pixel 10 Pro) [Images Only]", self.settings['model']),
+            ("Append Camera Model (e.g., _Pixel) [Images Only]", self.settings['model']),
             ("Preserve Camera Modes (e.g., .MP, .NIGHT)", self.settings['preserve_modes'])
         ]
         
@@ -223,23 +226,26 @@ class MetaSortProApp(ctk.CTk):
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="x", padx=20, pady=10)
         
+        # Changed state from "disabled" to "normal" since we have a default folder now
         self.preview_btn = ctk.CTkButton(frame, text="Preview Changes", height=40, fg_color="#4B5563", hover_color="#374151", 
-                                         font=ctk.CTkFont(size=14, weight="bold"), state="disabled", command=lambda: self._start_thread(True))
+                                         font=ctk.CTkFont(size=14, weight="bold"), state="normal", command=lambda: self._start_thread(True))
         self.preview_btn.pack(side="left", fill="x", expand=True, padx=(0, 10))
         
         self.run_btn = ctk.CTkButton(frame, text="Apply Changes", height=40, font=ctk.CTkFont(size=14, weight="bold"), 
-                                     state="disabled", command=lambda: self._start_thread(False))
+                                     state="normal", command=lambda: self._start_thread(False))
         self.run_btn.pack(side="right", fill="x", expand=True, padx=(10, 0))
 
     def _build_undo_controls(self):
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        # Changed state from "disabled" to "normal" since we have a default folder now
         self.undo_last_btn = ctk.CTkButton(frame, text="↩ Undo Last Session", height=30, fg_color="#991B1B", 
-                                           hover_color="#7F1D1D", state="disabled", command=self.undo_last_session)
+                                           hover_color="#7F1D1D", state="normal", command=self.undo_last_session)
         self.undo_last_btn.pack(side="left", fill="x", expand=True, padx=(0, 10))
         
         self.undo_hist_btn = ctk.CTkButton(frame, text="📋 Undo History...", height=30, fg_color="#854D0E", 
-                                           hover_color="#713F12", state="disabled", command=self.open_undo_history)
+                                           hover_color="#713F12", state="normal", command=self.open_undo_history)
         self.undo_hist_btn.pack(side="right", fill="x", expand=True, padx=(10, 0))
 
     def _build_console(self):
@@ -291,6 +297,7 @@ class MetaSortProApp(ctk.CTk):
         projected_names = set() 
         session_changes = [] 
         
+        self.log(f"Target Directory: {folder}")
         self.log("Scanning for metadata...")
         
         for filename in os.listdir(folder):
@@ -354,10 +361,10 @@ class MetaSortProApp(ctk.CTk):
 
     def _finalize_run(self, dry_run, stats):
         self.log("\n--- Done! ---")
-        self.log(f"{'Files to rename      ' if dry_run else 'Successfully renamed'}:          {stats['processed']}")
-        self.log(f"Skipped (already correct):     {stats['already_correct']}")
-        self.log(f"Skipped (no date data):        {stats['skipped']}")
-        if stats['ignored']: self.log(f"Ignored (unsupported files):   {stats['ignored']}")
+        self.log(f"{'Files to rename' if dry_run else 'Successfully renamed'}: {stats['processed']}")
+        self.log(f"Skipped (already correct): {stats['already_correct']}")
+        self.log(f"Skipped (no date data): {stats['skipped']}")
+        if stats['ignored']: self.log(f"Ignored (unsupported files): {stats['ignored']}")
         
         self.after(0, lambda: self.toggle_ui_state("normal"))
         self.after(0, lambda: self.log("\n>>> Process Complete <<<"))
